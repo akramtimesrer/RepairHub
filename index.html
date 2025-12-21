@@ -5,32 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RepairHub V4</title>
 
-    <!-- 1. Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Configure Tailwind to allow custom colors/fonts if needed -->
     <script>
         tailwind.config = {
             darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        primary: '#2563eb',
-                    }
-                }
-            }
+            theme: { extend: { colors: { primary: '#2563eb' } } }
         }
     </script>
 
-    <!-- 2. React & ReactDOM CDNs -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 
-    <!-- 3. Babel Standalone (enables JSX in the browser) -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- 4. Import Map: Maps your "import" statements to actual URLs -->
     <script type="importmap">
-   "imports": {
+    {
+      "imports": {
         "react": "https://esm.sh/react@18?dev",
         "react-dom": "https://esm.sh/react-dom@18?dev",
         "react-dom/client": "https://esm.sh/react-dom@18/client?dev",
@@ -43,13 +33,9 @@
     </script>
 </head>
 <body class="bg-gray-50 text-gray-900 transition-colors duration-200">
-    <!-- Root Element -->
+    
     <div id="root"></div>
 
-    <!-- 5. Link to your JavaScript file -->
-    <!-- data-type="module" is crucial here to support imports inside Babel -->
     <script type="text/babel" data-type="module" src="RepairHubjs.js"></script>
 </body>
-
 </html>
-
