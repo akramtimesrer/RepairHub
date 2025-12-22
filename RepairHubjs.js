@@ -161,7 +161,7 @@ function RepairMarketplace() {
   const [filters, setFilters] = useState({ machineType: '', budgetMin: '', budgetMax: '', location: '' });
   const [showSmartMatches, setShowSmartMatches] = useState(false);
 
-  // 1. Auth Init
+  // 1. Auth Init (REPAIRED)
   useEffect(() => {
     if (!auth) {
         setLoading(false); 
@@ -174,11 +174,14 @@ function RepairMarketplace() {
         if (u) {
             setUser(u);
             setAuthReady(true); 
-            // Update last login
+            // FIX: Changed from updateDoc to setDoc with { merge: true }
+            // This ensures we don't crash if the user document doesn't exist yet
             if (db) {
-                updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, u.uid), {
-                    lastLogin: new Date().toISOString()
-                }).catch(e => console.log("Last login update failed", e));
+                setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, u.uid), {
+                    lastLogin: new Date().toISOString(),
+                    email: u.email || "Anonymous",
+                    role: "user"
+                }, { merge: true }).catch(e => console.log("Last login update failed", e));
             }
         } else {
             setUser(null);
@@ -308,7 +311,7 @@ function RepairMarketplace() {
   const handleRegister = async (email, password, type, name) => {
       if (!user?.uid) return alert("System connecting... please wait a moment.");
       try {
-          const q = query(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS), where("email", "==", email));
+          const q = query(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, where("email", "==", email)));
           const snap = await getDocs(q);
           if (!snap.empty) return alert("This email is already registered. Please login instead.");
           const profile = type === 'company' ? defineCompanyAccount(email, name) : defineEngineerAccount(email, name);
