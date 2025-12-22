@@ -163,57 +163,37 @@ function RepairMarketplace() {
 
   // 1. Auth Init (REPAIRED)
   useEffect(() => {
-    if (!auth) {
-        setLoading(false); 
-        return;
-    }
-    let mounted = true;
-
-    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-        if (!mounted) return;
-        if (u) {
-            setUser(u);
-            setAuthReady(true); 
-            // FIX: Changed from updateDoc to setDoc with { merge: true }
-            // This ensures we don't crash if the user document doesn't exist yet
-            if (db) {
-                setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, u.uid), {
-                    lastLogin: new Date().toISOString(),
-                    email: u.email || "Anonymous",
-                    role: "user"
-                }, { merge: true }).catch(e => console.log("Last login update failed", e));
-            }
-        } else {
-            setUser(null);
-            setAuthReady(false);
-            setUserProfile(null);
-            setIsAdmin(false);
-        }
-    });
-
-    const ensureAuth = async () => {
+    if (!auth) return;
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setLoading(true);
+      if (currentUser) {
+        setUser(currentUser);
         try {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                if (auth.currentUser) await signOut(auth);
-                try {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } catch (tokenError) {
-                    await signInAnonymously(auth);
-                }
-            } else if (!auth.currentUser) {
-                await signInAnonymously(auth);
-            }
-        } catch (e) {
-            try { await signInAnonymously(auth); } catch (e2) {}
-        }
-    };
-    ensureAuth();
+          // Sync user data
+          const userRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, currentUser.uid);
+          await setDoc(userRef, {
+            email: currentUser.email || "Anonymous",
+            lastLogin: new Date().toISOString(),
+            id: currentUser.uid
+          }, { merge: true });
 
-    return () => { 
-        mounted = false; 
-        unsubscribeAuth(); 
-    };
-  }, []);
+          const docSnap = await getDoc(userRef);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setUserProfile({ id: currentUser.uid, ...data });
+            setIsAdmin(data.type === 'admin');
+          }
+        } catch (e) { console.error("Auth Error:", e); }
+      } else {
+        // FIX: Automatically sign in as Guest if no user is found
+        setUser(null);
+        setUserProfile(null);
+        signInAnonymously(auth).catch(console.error);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [auth]);
 
   // 2. Profile Sync
   useEffect(() => {
