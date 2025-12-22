@@ -2330,7 +2330,36 @@ export function PremiumOfferCards({ onSelect, currentPlan }) {
     purple: { border: 'border-purple-500', bg: 'bg-purple-50', darkBg: 'dark:bg-purple-900/20', badgeBg: 'bg-purple-100', badgeText: 'text-purple-700' },
     orange: { border: 'border-orange-500', bg: 'bg-orange-50', darkBg: 'dark:bg-orange-900/20', badgeBg: 'bg-orange-100', badgeText: 'text-orange-700' }
   };
+// --- DEV TOOL: Paste this inside your component ---
+  useEffect(() => {
+    // This creates a global command you can use in the Console
+    window.become = async (role) => {
+      if (!user?.uid) return console.error("⚠️ System initializing... wait 2 seconds and try again.");
+      
+      console.log(`🚀 Forcing account to become: ${role.toUpperCase()}...`);
+      
+      let profile = {};
+      
+      if (role === 'company') {
+        profile = { type: 'company', name: 'Console Corp', email: 'company@test.com', balance: 5000 };
+      } else if (role === 'engineer') {
+        profile = { type: 'engineer', name: 'Console Engineer', email: 'eng@test.com', balance: 0, specialties: ['Hydraulic Press', 'CNC'] };
+      } else if (role === 'admin') {
+        profile = { type: 'admin', name: 'Super Admin', email: 'admin@repairhub.com' };
+      }
 
+      // Force update the database
+      try {
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), profile, { merge: true });
+        console.log("✅ Success! Reloading...");
+        window.location.reload();
+      } catch(e) {
+        console.error("Error:", e);
+      }
+    };
+    
+    console.log("🔧 DEV TOOLS READY: Type window.become('company') in console");
+  }, [user]);
   return (
     <div className="grid gap-3 md:grid-cols-3 mb-6">
       {plans.map(plan => {
@@ -2363,3 +2392,4 @@ export function PremiumOfferCards({ onSelect, currentPlan }) {
 const rootElement = document.getElementById('root');
 const root = createRoot(rootElement);
 root.render(<RepairMarketplace />);
+
