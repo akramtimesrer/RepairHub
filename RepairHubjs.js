@@ -121,491 +121,6 @@ const defineEngineerAccount = (email, name) => ({
     lastLogin: new Date().toISOString()
 });
 
-// --- Main Application Component ---
-function RepairMarketplace() {
-  const [user, setUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [authReady, setAuthReady] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  
-  // PATCH: New Language State
-  const [language, setLanguage] = useState('en'); // Options: 'en', 'fr', 'ar'
-
-  // Feature 4: Global Context Data (Simulated Registry)
-  const [myMachines, setMyMachines] = useState([
-      { id: 'M001', name: 'CNC Lathe X200', type: 'CNC Machine', serial: 'SN-88219-X', location: 'Floor 1', status: 'Active' },
-      { id: 'M002', name: 'Hydraulic Press HP5', type: 'Hydraulic Press', serial: 'HP-5000-V2', location: 'Floor 2', status: 'Active' },
-      { id: 'M003', name: 'Cooling Unit 09', type: 'HVAC', serial: 'CU-09-TRANE', location: 'Roof', status: 'Maintenance' },
-      { id: 'M004', name: 'Robotic Arm R-2000', type: 'Robotics', serial: 'R2K-JAPAN-99', location: 'Assembly Line A', status: 'Active' }
-  ]);
-
-  // Navigation & Modals
-  const [currentView, setCurrentView] = useState('home'); 
-  const [selectedRequest, setSelectedRequest] = useState(null);
-  const [viewProfile, setViewProfile] = useState(null);
-  const [modals, setModals] = useState({
-    newRequest: false, newOffer: false, contractTemplate: null, 
-    contractSign: null, wallet: false, topUp: false, filters: false, 
-    offerControl: null, notifications: false, chat: null, review: null,
-    assistant: false, pricing: false, settings: false
-  });
-
-  // Data
-  const [requests, setRequests] = useState([]);
-  const [offers, setOffers] = useState([]);
-  const [contracts, setContracts] = useState([]);
-  const [notifications, setNotifications] = useState([]);
-  const [allUsers, setAllUsers] = useState({}); 
-  const [filters, setFilters] = useState({ machineType: '', budgetMin: '', budgetMax: '', location: '' });
-  const [showSmartMatches, setShowSmartMatches] = useState(false);
-
-  // -------------------------------------------------------------------------
-  // RULE 1: STRICT AUTH STATE MANAGEMENT
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    if (!auth) {
-        setLoading(false); 
-        return;
-    }
-    let mounted = true;
-
-    const unsubscribeAuth = onAuthStateChanged(auth, async (u) => {
-        if (!mounted) return;
-        
-        if (u) {
-            // User exists (Anonymous or logged in)
-            setUser(u);
-            setAuthReady(true);
-            
-            // Try to load profile
-            if (db) {
-                try {
-                    const userRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, u.uid);
-                    const snap = await getDoc(userRef);
-                    
-                    if (snap.exists()) {
-                        const data = snap.data();
-                        setUserProfile({ id: u.uid, ...data });
-                        setIsAdmin(data.type === 'admin');
-                        
-                        // Update last login
-                        updateDoc(userRef, { lastLogin: new Date().toISOString() }).catch(() => {});
-                    } else {
-                        // User is authenticated anonymously but has no profile in DB yet
-                        // We set a temporary "Guest" profile in state only
-                        setUserProfile({ id: u.uid, email: "Anonymous", type: "guest" });
-                        setIsAdmin(false);
-                    }
-                } catch (err) {
-                    console.error("Profile Fetch Error:", err);
-                }
-            }
-            setLoading(false);
-        } else {
-            // User is null -> RULE 1: Call signInAnonymously immediately
-            console.log("No user detected. Signing in anonymously...");
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Anonymous auth failed:", error);
-            }
-        }
-    });
-
-    return () => { 
-        mounted = false; 
-        unsubscribeAuth(); 
-    };
-  }, []);
-
-  // 2. Profile Sync Listener
-  // This ensures that when handleLogin/handleRegister writes to DB, the state updates automatically
-  useEffect(() => {
-      if (!user?.uid || !db) return; 
-
-      const ref = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid);
-      const unsub = onSnapshot(ref, (snap) => {
-          if (snap.exists()) {
-              const data = snap.data();
-              setUserProfile({ id: user.uid, ...data });
-              setIsAdmin(data.type === 'admin');
-          }
-          // Note: We don't set loading false here to avoid flickering, handled in main Auth effect
-      });
-      return () => unsub();
-  }, [user?.uid]);
-
-  // 3. Data Fetching
-  useEffect(() => {
-      // Only fetch data if we have a real user (not Anonymous/Guest)
-      if (!user?.uid || !db || (userProfile && userProfile.email === "Anonymous")) return;
-      
-      const sub = (colName, setter, sortFn) => {
-          const ref = collection(db, 'artifacts', appId, 'public', 'data', colName);
-          return onSnapshot(ref, (snap) => {
-              const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-              if (sortFn) items.sort(sortFn);
-              setter(items);
-          }, (e) => console.log(`Fetching ${colName} deferred`));
-      };
-
-      const unsubReq = sub(COLLECTIONS.REQUESTS, setRequests, (a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      const unsubOff = sub(COLLECTIONS.OFFERS, setOffers);
-      const unsubCon = sub(COLLECTIONS.CONTRACTS, setContracts);
-      
-      const unsubNotifs = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.NOTIFICATIONS), (snap) => {
-          const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          const myNotifs = all.filter(n => n.receiverId === user.uid);
-          myNotifs.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
-          setNotifications(myNotifs);
-      });
-
-      const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS), (snap) => {
-          const map = {};
-          snap.docs.forEach(d => map[d.id] = { id: d.id, ...d.data() });
-          setAllUsers(map);
-      }); 
-
-      return () => { unsubReq(); unsubOff(); unsubCon(); unsubUsers(); unsubNotifs(); };
-  }, [user?.uid, userProfile?.email]);
-
-  // Actions
-  const notifyUser = async (receiverId, message, type='info', targetId=null) => {
-      try {
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.NOTIFICATIONS), {
-              receiverId,
-              message,
-              type,
-              targetId,
-              read: false,
-              createdAt: new Date().toISOString()
-          });
-      } catch(e) { console.log("Notify failed", e); }
-  };
-
-  const handleReleaseFunds = async (contract) => {
-      if (contract.released) return alert("Funds already released.");
-      try {
-          const engRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, contract.engineerId);
-          const engSnap = await getDoc(engRef);
-          if (!engSnap.exists()) return alert("Engineer record not found");
-          
-          const engData = engSnap.data();
-          const newBalance = (engData.balance || 0) + Number(contract.price);
-          await updateDoc(engRef, { balance: newBalance });
-          
-          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.CONTRACTS, contract.id), {
-              released: true,
-              status: 'Completed'
-          });
-
-          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.REQUESTS, contract.requestId), {
-              status: 'Completed'
-          });
-
-          notifyUser(contract.engineerId, `Escrow released! $${contract.price} added to your wallet.`, 'success');
-          notifyUser(contract.companyId, `Job marked complete. Funds released to engineer.`, 'info');
-          
-          alert("Funds released successfully!");
-          toggleModal('review', { engineerId: contract.engineerId, contractId: contract.id });
-      } catch (e) { alert("Transfer failed: " + e.message); }
-  };
-
-  // RULE 4: CLEAN DATA HANDLING (Register)
-  const handleRegister = async (email, password, type, name) => {
-      if (!user?.uid) return alert("System connecting... please wait a moment.");
-      try {
-          // Check if email taken
-          const q = query(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, where("email", "==", email)));
-          const snap = await getDocs(q);
-          if (!snap.empty) return alert("This email is already registered. Please login instead.");
-          
-          // Use setDoc to CREATE the user profile on the existing anonymous UID
-          const profile = type === 'company' ? defineCompanyAccount(email, name) : defineEngineerAccount(email, name);
-          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), cleanData(profile));
-          
-          // State update happens automatically via Snapshot Listener (Effect 2)
-      } catch (e) { alert("Registration Error: " + e.message); }
-  };
-
-  const handleLogin = async (email, password) => {
-      if (!user?.uid) return alert("System connecting... please wait a moment.");
-      
-      // RULE 3: SECRET ADMIN LOGIN
-      if (email === 'Repairhub@gmail.com' && password === 'Akram.2003') {
-          console.log("Admin Credentials Detected. Initiating Admin Access...");
-          const adminProfile = defineManagerAccount();
-          
-          try { 
-              // Force write Admin Profile to the CURRENT anonymous UID
-              // This allows you to become admin on ANY device
-              await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), cleanData(adminProfile), { merge: true });
-              
-              // Optimistically update state
-              setUserProfile({ id: user.uid, ...adminProfile });
-              setIsAdmin(true);
-              return;
-          } catch (e) {
-              console.error("Admin Login Failed", e);
-              alert("Admin Login Error: " + e.message);
-              return;
-          }
-      }
-
-      // Standard Login Logic
-      try {
-          const q = query(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS), where("email", "==", email));
-          const snap = await getDocs(q);
-          
-          if (!snap.empty) {
-              const oldUserData = snap.docs[0].data();
-              // Sort by creation if multiple docs exist (fallback)
-              // But basically we copy the old user data to the NEW anonymous UID
-              // This effectively "Logs In" the user on this device
-              await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), oldUserData, { merge: true });
-              
-              // If the old doc ID was different, we might want to delete it or keep it as history. 
-              // For simple simulated auth, copying is safest to preserve current session ID.
-          } else { 
-              alert("Account not found. Please register first."); 
-          }
-      } catch (e) { alert("Login Error: " + e.message); }
-  };
-
-  const handleSocialLogin = async (providerName) => {
-      if (!user?.uid) return alert("Initializing authentication...");
-      try {
-          const mockUser = {
-              email: `user_${providerName.toLowerCase()}@example.com`,
-              name: `${providerName} User`,
-              type: 'company' 
-          };
-          // Just like register, use setDoc
-          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), 
-            cleanData(defineCompanyAccount(mockUser.email, mockUser.name))
-          );
-          alert(`Successfully signed in with ${providerName}!`);
-      } catch (e) {
-          console.error(e);
-          alert("Social login simulation failed. Please try standard login.");
-      }
-  };
-
-  const handleLogout = async () => {
-      setLoading(true);
-      try {
-        await signOut(auth);
-        // On logout, immediately sign in anonymously again to be a "Guest"
-        await signInAnonymously(auth);
-        // Reset local state
-        setUserProfile({ email: 'Anonymous', type: 'guest' });
-        setIsAdmin(false);
-        setCurrentView('home');
-        setSelectedRequest(null);
-      } catch (e) { window.location.reload(); } finally { setLoading(false); }
-  };
-
-  const handleUpgrade = async (tier) => {
-    if (!user?.uid) return;
-    const isPlus = tier === 'premium_plus';
-    
-    try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), {
-        subscriptionTier: tier,
-        canLinkIoTSensors: true, // Available for both tiers
-        hasProfessionalInstall: isPlus, // Tier 2 Only
-        unlimitedChatbot: isPlus,       // Tier 2 Only
-        updatedAt: new Date().toISOString()
-      });
-      
-      alert(`Success! Upgraded to ${isPlus ? 'Premium Plus' : 'Premium'}.`);
-      toggleModal('pricing', false);
-    } catch (e) {
-      alert("Upgrade failed: " + e.message);
-    }
-  };
-
-  const postData = async (coll, data) => {
-      if (!userProfile) return;
-      try { 
-          const safeData = cleanData({ ...data, createdAt: new Date().toISOString() });
-          const docRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', coll), safeData); 
-          return docRef.id; 
-      } catch (e) { 
-          console.error("Post Data Error:", e);
-          alert("Action failed: " + e.message); 
-          return false; 
-      }
-  };
-
-  const toggleModal = (name, val) => setModals(m => ({ ...m, [name]: val }));
-  
-  const filteredRequests = requests.filter(r => {
-      if (!r) return false;
-      const typeMatch = !filters.machineType || (r.machineType && r.machineType.toLowerCase().includes(filters.machineType.toLowerCase()));
-      const locMatch = !filters.location || (r.location && r.location.toLowerCase().includes(filters.location.toLowerCase()));
-      
-      if (userProfile?.type === 'engineer' && showSmartMatches) {
-          if (!userProfile.specialties) return false;
-          const matches = userProfile.specialties.some(s => 
-              (r.machineType && r.machineType.toLowerCase().includes(s.toLowerCase())) ||
-              (r.machine && r.machine.toLowerCase().includes(s.toLowerCase()))
-          );
-          return matches && typeMatch && locMatch;
-      }
-
-      return typeMatch && locMatch;
-  });
-
-  const activeRequestObj = selectedRequest ? requests.find(r => r.id === selectedRequest) : null;
-
-  // -------------------------------------------------------------------------
-  // RULE 2: SMART ROUTING
-  // -------------------------------------------------------------------------
-  
-  // 1. If loading, show spinner
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div></div>;
-  
-  // 2. If no Auth object at all (Firebase error)
-  if (!auth) return <div className="min-h-screen flex items-center justify-center">Firebase not configured.</div>;
-  
-  // 3. THE GOLD STANDARD CHECK: 
-  // If User is NULL OR User is ANONYMOUS -> Render Landing Page
-  // This ensures Guests stay on Landing Page, and only Registered users see the App.
-  if (!userProfile || userProfile.email === "Anonymous") {
-      return (
-        <LandingPage 
-            key={user?.uid || 'guest'} 
-            onRegister={handleRegister} 
-            onLogin={handleLogin} 
-            onSocialLogin={handleSocialLogin} 
-            authReady={authReady && !!user} 
-        />
-      );
-  }
-
-  // 4. If Registered User -> Render Dashboard
-  return (
-    <div key={user?.uid} className={`min-h-screen flex flex-col ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'}`}>
-       
-       <nav className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b sticky top-0 z-30 shadow-sm backdrop-blur-md bg-opacity-90`}>
-        <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-            <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2 cursor-pointer font-bold text-xl" onClick={() => setCurrentView('home')}><Wrench className="w-6 h-6 text-blue-600" /> RepairHub</div>
-                <div className="hidden md:flex items-center gap-1">
-                    <button onClick={() => setCurrentView('home')} className={`px-3 py-1.5 rounded-md text-sm font-medium ${currentView === 'home' ? 'text-blue-600' : 'text-gray-500'}`}>Market</button>
-                    <button onClick={() => setCurrentView('map')} className={`px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1 ${currentView === 'map' ? 'text-blue-600' : 'text-gray-500'}`}>
-                        <Map className="w-4 h-4" /> Map View
-                    </button>
-                    <button onClick={() => setCurrentView('messages')} className={`px-3 py-1.5 rounded-md text-sm font-medium ${currentView === 'messages' ? 'text-blue-600' : 'text-gray-500'}`}>Messages</button>
-                    <button onClick={() => setCurrentView('troubleshooter')} className={`px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1 ${currentView === 'troubleshooter' ? 'text-blue-600' : 'text-gray-500'}`}>
-                        <BrainCircuit className="w-4 h-4" /> AI Troubleshooter
-                    </button>
-                     {(userProfile.type === 'company' || isAdmin) && (
-                        <button onClick={() => setCurrentView('iot-monitor')} className={`px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1 ${currentView === 'iot-monitor' ? 'text-blue-600' : 'text-gray-500'}`}>
-                            <Activity className="w-4 h-4" /> IoT Monitor
-                        </button>
-                    )}
-                    {isAdmin && <button onClick={() => setCurrentView('admin')} className="px-3 py-1.5 rounded-md text-sm font-medium text-purple-600">Admin</button>}
-                </div>
-            </div>
-            <div className="flex items-center gap-3">
-                <button onClick={() => setDarkMode(!darkMode)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">{darkMode ? <Sun className="w-5 h-5"/> : <Moon className="w-5 h-5"/>}</button>
-                
-                {/* PATCH: Settings Button */}
-                <button onClick={() => toggleModal('settings', true)} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="Settings">
-                    <Settings className="w-5 h-5"/>
-                </button>
-
-                <div className="h-6 w-px bg-gray-200 dark:bg-gray-700 mx-1"></div>
-                
-                <button onClick={() => toggleModal('notifications', true)} className="relative p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                    <Bell className="w-5 h-5"/>
-                    {notifications.length > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-gray-800"></span>}
-                </button>
-
-                {/* Premium Button */}
-                <PremiumButton onClick={() => toggleModal('pricing', true)} />
-
-                <button onClick={() => toggleModal('wallet', true)} className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 font-bold text-green-600 text-sm">${(userProfile.balance || 0).toLocaleString()}</button>
-                <button onClick={() => setViewProfile(userProfile)} className="flex items-center gap-2 pl-2 pr-4 py-1 border rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"><div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm">{userProfile.profilePicture}</div><span className="text-xs font-bold hidden md:block">{userProfile.name}</span></button>
-            </div>
-        </div>
-       </nav>
-
-       {/* Sub-Header for Filters */}
-       {currentView === 'home' && !selectedRequest && (
-           <div className={`border-b ${darkMode ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-white'} py-3 px-4 transition-colors`}>
-               <div className="max-w-7xl mx-auto flex flex-wrap gap-4 items-center justify-between">
-                   <div className="flex items-center gap-2 text-gray-500 text-sm">
-                       <Filter className="w-4 h-4"/>
-                       <input className="bg-transparent border-b border-gray-300 dark:border-gray-700 focus:border-blue-500 outline-none w-32 px-1" placeholder="Machine Type" value={filters.machineType} onChange={e => setFilters({...filters, machineType: e.target.value})}/>
-                       <input className="bg-transparent border-b border-gray-300 dark:border-gray-700 focus:border-blue-500 outline-none w-32 px-1" placeholder="Location" value={filters.location} onChange={e => setFilters({...filters, location: e.target.value})}/>
-                   </div>
-                   {userProfile.type === 'company' && (
-                      <button onClick={() => toggleModal('newRequest', true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium shadow-sm transition flex items-center gap-2 text-sm"><Plus className="w-4 h-4"/> Post Request</button>
-                   )}
-               </div>
-           </div>
-       )}
-
-       <main className="flex-1 max-w-7xl mx-auto px-4 py-8 w-full">
-         {currentView === 'admin' && isAdmin ? (
-             <AdminPanel users={allUsers} requests={requests} contracts={contracts} onBack={() => setCurrentView('home')} darkMode={darkMode} />
-         ) : currentView === 'messages' ? (
-             <MessageSystem user={userProfile} users={allUsers} db={db} appId={appId} channelId="general" />
-         ) : currentView === 'troubleshooter' ? (
-             <AITroubleshooter darkMode={darkMode} />
-         ) : currentView === 'iot-monitor' ? (
-            <IoTDashboard user={userProfile} notifyUser={notifyUser} postData={postData} darkMode={darkMode} />
-         ) : currentView === 'map' ? (
-           <GeoMap requests={filteredRequests} users={Object.values(allUsers).filter(u => u.type === 'engineer')} currentUser={userProfile} onRequestClick={setSelectedRequest} onProfileClick={setViewProfile} darkMode={darkMode} />
-         ) : (selectedRequest && requests.find(r => r.id === selectedRequest)) ? (
-             <RequestDetail request={requests.find(r => r.id === selectedRequest)} offers={offers.filter(o => o.requestId === selectedRequest)} contracts={contracts.filter(c => c.requestId === selectedRequest)} currentUser={userProfile} onBack={() => setSelectedRequest(null)} onOffer={() => toggleModal('newOffer', true)} onContract={(id) => toggleModal('contractTemplate', id)} onViewContract={(c) => toggleModal('contractSign', c.id)} users={allUsers} darkMode={darkMode} />
-         ) : viewProfile ? (
-             <ProfileView profile={viewProfile} onBack={() => setViewProfile(null)} onLogout={handleLogout} darkMode={darkMode} />
-         ) : (
-             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                 {filteredRequests.map(req => (
-                     <div key={req.id} onClick={() => setSelectedRequest(req.id)} className={`group rounded-xl shadow-sm border cursor-pointer hover:shadow-lg transition overflow-hidden flex flex-col p-5 relative ${req.isAutomated ? 'bg-red-50 dark:bg-red-900/10 border-red-200' : 'bg-white dark:bg-gray-800 border-gray-100'}`}>
-                         <div className="flex justify-between items-start mb-3">
-                             <div className="flex items-center gap-2">
-                                 <div className={`p-2 rounded-lg ${req.isAutomated ? 'bg-red-100 text-red-600' : 'bg-blue-50 dark:bg-gray-700 text-blue-600'}`}><Settings className="w-5 h-5"/></div>
-                                 <div><h3 className="font-bold text-lg leading-none">{req.machine}</h3><span className="text-xs text-gray-500">{req.machineType}</span></div>
-                             </div>
-                             <StatusBadge status={req.status} />
-                         </div>
-                         <p className="text-gray-600 dark:text-gray-300 text-sm line-clamp-3 mb-4">{req.issue}</p>
-                         <div className="font-bold text-green-600 flex items-center gap-1 mt-auto"><DollarSign className="w-4 h-4"/> {req.budget}</div>
-                     </div>
-                 ))}
-             </div>
-         )}
-       </main>
-
-       {/* Global Modals */}
-       {modals.settings && <SettingsModal onClose={() => toggleModal('settings', false)} user={userProfile} language={language} setLanguage={setLanguage} darkMode={darkMode} />}
-       {modals.pricing && <PricingModal onClose={() => toggleModal('pricing', false)} onUpgrade={() => alert("Upgrade Logic Here")} darkMode={darkMode} />}
-       {modals.assistant && <AIContextAssistant user={userProfile} machines={myMachines} onClose={() => toggleModal('assistant', false)} darkMode={darkMode} />}
-       {modals.wallet && <WalletModal balance={userProfile.balance} onClose={() => toggleModal('wallet', false)} onTopUp={() => { toggleModal('wallet', false); toggleModal('topUp', true); }} darkMode={darkMode}/>}
-       {modals.topUp && <TopUpModal onClose={() => toggleModal('topUp', false)} onComplete={(amt) => { updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), { balance: (userProfile.balance || 0) + Number(amt) }); toggleModal('topUp', false); }} darkMode={darkMode}/>}
-       {modals.newRequest && <RequestForm onSubmit={async (data) => { if(await postData(COLLECTIONS.REQUESTS, {...data, contactId: user?.uid, companyName: userProfile.name, status: 'active'})) toggleModal('newRequest', false); }} onCancel={() => toggleModal('newRequest', false)} darkMode={darkMode}/>}
-       {modals.newOffer && <OfferForm onSubmit={async (data) => { if(await postData(COLLECTIONS.OFFERS, {...data, requestId: selectedRequest, engineerId: user?.uid, engineerName: userProfile.name, engineerPic: userProfile.profilePicture, status: 'pending'})) toggleModal('newOffer', false); }} onCancel={() => toggleModal('newOffer', false)} darkMode={darkMode}/>}
-       
-       <button onClick={() => toggleModal('assistant', !modals.assistant)} className="fixed bottom-6 right-6 p-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-full shadow-2xl hover:scale-110 transition z-50 flex items-center justify-center border-2 border-white dark:border-gray-800">
-           {modals.assistant ? <XCircle className="w-6 h-6"/> : <Bot className="w-6 h-6"/>}
-       </button>
-
-    </div>
-  );
-}
-
 // --- SUB COMPONENTS ---
 
 // 1. Navbar Button Component
@@ -1579,9 +1094,7 @@ const PremiumOfferCards = ({ onSelect, currentPlan }) => {
   );
 }
 
-// ==========================================
-// [MAIN COMPONENT] WITH GOLD STANDARD FIXES
-// ==========================================
+// --- MAIN APPLICATION COMPONENT ---
 export default function RepairMarketplace() {
   const [user, setUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -1619,6 +1132,7 @@ export default function RepairMarketplace() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setLoading(true);
       if (currentUser) {
+       
         // User detected (Guest or Registered)
         setUser(currentUser);
         try {
@@ -1753,9 +1267,9 @@ export default function RepairMarketplace() {
     try {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), {
         subscriptionTier: tier,
-        canLinkIoTSensors: true, // Available for both tiers
-        hasProfessionalInstall: isPlus, // Tier 2 Only
-        unlimitedChatbot: isPlus,       // Tier 2 Only
+        canLinkIoTSensors: true,
+        hasProfessionalInstall: isPlus,
+        unlimitedChatbot: isPlus,
         updatedAt: new Date().toISOString()
       });
       
@@ -1764,6 +1278,14 @@ export default function RepairMarketplace() {
     } catch (e) {
       alert("Upgrade failed: " + e.message);
     }
+  };
+
+  const notifyUser = async (receiverId, message, type='info', targetId=null) => {
+      try {
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.NOTIFICATIONS), {
+              receiverId, message, type, targetId, read: false, createdAt: new Date().toISOString()
+          });
+      } catch(e) { console.log("Notify failed", e); }
   };
 
   const postData = async (coll, data) => {
@@ -1798,21 +1320,13 @@ export default function RepairMarketplace() {
       return typeMatch && locMatch;
   });
 
-  const activeRequestObj = selectedRequest ? requests.find(r => r.id === selectedRequest) : null;
-
   // -------------------------------------------------------------------------
   // RULE 2: SMART ROUTING
   // -------------------------------------------------------------------------
   
-  // 1. If loading, show spinner
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div></div>;
-  
-  // 2. If no Auth object at all (Firebase error)
   if (!auth) return <div className="min-h-screen flex items-center justify-center">Firebase not configured.</div>;
   
-  // 3. THE GOLD STANDARD CHECK: 
-  // If User is NULL OR User is ANONYMOUS -> Render Landing Page
-  // This ensures Guests stay on Landing Page, and only Registered users see the App.
   if (!userProfile || userProfile.email === "Anonymous") {
       return (
         <LandingPage 
@@ -1820,15 +1334,13 @@ export default function RepairMarketplace() {
             onRegister={handleRegister} 
             onLogin={handleLogin} 
             onSocialLogin={handleSocialLogin} 
-            authReady={authReady && !!user} 
+            authReady={!!user} 
         />
       );
   }
 
-  // 4. If Registered User -> Render Dashboard
   return (
     <div key={user?.uid} className={`min-h-screen flex flex-col ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'}`}>
-       
        <nav className={`${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b sticky top-0 z-30 shadow-sm backdrop-blur-md bg-opacity-90`}>
         <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
             <div className="flex items-center gap-6">
@@ -1846,7 +1358,7 @@ export default function RepairMarketplace() {
                         <button onClick={() => setCurrentView('iot-monitor')} className={`px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1 ${currentView === 'iot-monitor' ? 'text-blue-600' : 'text-gray-500'}`}>
                             <Activity className="w-4 h-4" /> IoT Monitor
                         </button>
-                    )}
+                     )}
                     {isAdmin && <button onClick={() => setCurrentView('admin')} className="px-3 py-1.5 rounded-md text-sm font-medium text-purple-600">Admin</button>}
                 </div>
             </div>
@@ -1891,52 +1403,27 @@ export default function RepairMarketplace() {
        )}
 
        <main className="flex-1 max-w-7xl mx-auto px-4 py-8 w-full">
-         {currentView === 'admin' && isAdmin ? (
-             <AdminPanel users={allUsers} requests={requests} contracts={contracts} onBack={() => setCurrentView('home')} darkMode={darkMode} />
-         ) : currentView === 'messages' ? (
-             <MessageSystem user={userProfile} users={allUsers} db={db} appId={appId} channelId="general" />
-         ) : currentView === 'troubleshooter' ? (
-             <AITroubleshooter darkMode={darkMode} />
-         ) : currentView === 'iot-monitor' ? (
-            <IoTDashboard user={userProfile} notifyUser={notifyUser} postData={postData} darkMode={darkMode} />
-         ) : currentView === 'map' ? (
-           <GeoMap requests={filteredRequests} users={Object.values(allUsers).filter(u => u.type === 'engineer')} currentUser={userProfile} onRequestClick={setSelectedRequest} onProfileClick={setViewProfile} darkMode={darkMode} />
-         ) : (selectedRequest && requests.find(r => r.id === selectedRequest)) ? (
-             <RequestDetail request={requests.find(r => r.id === selectedRequest)} offers={offers.filter(o => o.requestId === selectedRequest)} contracts={contracts.filter(c => c.requestId === selectedRequest)} currentUser={userProfile} onBack={() => setSelectedRequest(null)} onOffer={() => toggleModal('newOffer', true)} onContract={(id) => toggleModal('contractTemplate', id)} onViewContract={(c) => toggleModal('contractSign', c.id)} users={allUsers} darkMode={darkMode} />
-         ) : viewProfile ? (
-             <ProfileView profile={viewProfile} onBack={() => setViewProfile(null)} onLogout={handleLogout} darkMode={darkMode} />
-         ) : (
-             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                 {filteredRequests.map(req => (
-                     <div key={req.id} onClick={() => setSelectedRequest(req.id)} className={`group rounded-xl shadow-sm border cursor-pointer hover:shadow-lg transition overflow-hidden flex flex-col p-5 relative ${req.isAutomated ? 'bg-red-50 dark:bg-red-900/10 border-red-200' : 'bg-white dark:bg-gray-800 border-gray-100'}`}>
-                         <div className="flex justify-between items-start mb-3">
-                             <div className="flex items-center gap-2">
-                                 <div className={`p-2 rounded-lg ${req.isAutomated ? 'bg-red-100 text-red-600' : 'bg-blue-50 dark:bg-gray-700 text-blue-600'}`}><Settings className="w-5 h-5"/></div>
-                                 <div><h3 className="font-bold text-lg leading-none">{req.machine}</h3><span className="text-xs text-gray-500">{req.machineType}</span></div>
-                             </div>
-                             <StatusBadge status={req.status} />
-                         </div>
-                         <p className="text-gray-600 dark:text-gray-300 text-sm line-clamp-3 mb-4">{req.issue}</p>
-                         <div className="font-bold text-green-600 flex items-center gap-1 mt-auto"><DollarSign className="w-4 h-4"/> {req.budget}</div>
-                     </div>
-                 ))}
-             </div>
-         )}
+         {currentView === 'admin' && isAdmin ? <AdminPanel users={allUsers} requests={requests} contracts={contracts} onBack={() => setCurrentView('home')} darkMode={darkMode} onBan={(uid) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, uid), { status: 'banned' })} verifyUser={(uid, status) => { updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, uid), { verified: status }); notifyUser(uid, status ? "Your account has been verified!" : "Verification revoked.", status ? "success" : "warning"); }} onReleaseFunds={() => {}} /> 
+         : currentView === 'messages' ? <MessageSystem user={userProfile} users={allUsers} db={db} appId={appId} channelId="general" /> 
+         : currentView === 'troubleshooter' ? <AITroubleshooter darkMode={darkMode} /> 
+         : currentView === 'iot-monitor' ? <IoTDashboard user={userProfile} notifyUser={notifyUser} postData={postData} darkMode={darkMode} /> 
+         : currentView === 'map' ? <GeoMap requests={filteredRequests} users={Object.values(allUsers).filter(u => u.type === 'engineer')} currentUser={userProfile} onRequestClick={setSelectedRequest} onProfileClick={setViewProfile} darkMode={darkMode} /> 
+         : selectedRequest && requests.find(r => r.id === selectedRequest) ? <RequestDetail request={requests.find(r => r.id === selectedRequest)} offers={offers.filter(o => o.requestId === selectedRequest)} contracts={contracts.filter(c => c.requestId === selectedRequest)} currentUser={userProfile} onBack={() => setSelectedRequest(null)} onOffer={() => toggleModal('newOffer', true)} onContract={(id) => toggleModal('contractTemplate', id)} onViewContract={(c) => toggleModal('contractSign', c.id)} users={allUsers} darkMode={darkMode} /> 
+         : viewProfile ? <ProfileView profile={viewProfile} onBack={() => setViewProfile(null)} onLogout={handleLogout} darkMode={darkMode} /> 
+         : <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{filteredRequests.map(req => <div key={req.id} onClick={() => setSelectedRequest(req.id)} className={`group rounded-xl shadow-sm border cursor-pointer hover:shadow-lg transition overflow-hidden flex flex-col p-5 relative ${req.isAutomated ? 'bg-red-50 dark:bg-red-900/10 border-red-200' : 'bg-white dark:bg-gray-800 border-gray-100'}`}><div className="flex justify-between items-start mb-3"><div className="flex items-center gap-2"><div className={`p-2 rounded-lg ${req.isAutomated ? 'bg-red-100 text-red-600' : 'bg-blue-50 dark:bg-gray-700 text-blue-600'}`}><Settings className="w-5 h-5"/></div><div><h3 className="font-bold text-lg leading-none">{req.machine}</h3><span className="text-xs text-gray-500">{req.machineType}</span></div></div><StatusBadge status={req.status} /></div><p className="text-gray-600 dark:text-gray-300 text-sm line-clamp-3 mb-4">{req.issue}</p><div className="font-bold text-green-600 flex items-center gap-1 mt-auto"><DollarSign className="w-4 h-4"/> {req.budget}</div></div>)}</div>}
        </main>
 
-       {/* Global Modals */}
        {modals.settings && <SettingsModal onClose={() => toggleModal('settings', false)} user={userProfile} language={language} setLanguage={setLanguage} darkMode={darkMode} />}
-       {modals.pricing && <PricingModal onClose={() => toggleModal('pricing', false)} onUpgrade={() => alert("Upgrade Logic Here")} darkMode={darkMode} />}
+       {modals.pricing && <PricingModal onClose={() => toggleModal('pricing', false)} onUpgrade={handleUpgrade} darkMode={darkMode} />}
        {modals.assistant && <AIContextAssistant user={userProfile} machines={myMachines} onClose={() => toggleModal('assistant', false)} darkMode={darkMode} />}
        {modals.wallet && <WalletModal balance={userProfile.balance} onClose={() => toggleModal('wallet', false)} onTopUp={() => { toggleModal('wallet', false); toggleModal('topUp', true); }} darkMode={darkMode}/>}
        {modals.topUp && <TopUpModal onClose={() => toggleModal('topUp', false)} onComplete={(amt) => { updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), { balance: (userProfile.balance || 0) + Number(amt) }); toggleModal('topUp', false); }} darkMode={darkMode}/>}
        {modals.newRequest && <RequestForm onSubmit={async (data) => { if(await postData(COLLECTIONS.REQUESTS, {...data, contactId: user?.uid, companyName: userProfile.name, status: 'active'})) toggleModal('newRequest', false); }} onCancel={() => toggleModal('newRequest', false)} darkMode={darkMode}/>}
-       {modals.newOffer && <OfferForm onSubmit={async (data) => { if(await postData(COLLECTIONS.OFFERS, {...data, requestId: selectedRequest, engineerId: user?.uid, engineerName: userProfile.name, engineerPic: userProfile.profilePicture, status: 'pending'})) toggleModal('newOffer', false); }} onCancel={() => toggleModal('newOffer', false)} darkMode={darkMode}/>}
+       {modals.newOffer && <OfferForm onSubmit={async (data) => { if(await postData(COLLECTIONS.OFFERS, {...data, requestId: selectedRequest, engineerId: user?.uid, engineerName: userProfile.name, engineerPic: userProfile.profilePicture, status: 'pending'})) { const req = requests.find(r => r.id === selectedRequest); if(req) notifyUser(req.contactId, `New offer from ${userProfile.name}`, 'info', req.id); toggleModal('newOffer', false); } }} onCancel={() => toggleModal('newOffer', false)} darkMode={darkMode}/>}
        
        <button onClick={() => toggleModal('assistant', !modals.assistant)} className="fixed bottom-6 right-6 p-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-full shadow-2xl hover:scale-110 transition z-50 flex items-center justify-center border-2 border-white dark:border-gray-800">
            {modals.assistant ? <XCircle className="w-6 h-6"/> : <Bot className="w-6 h-6"/>}
        </button>
-
     </div>
   );
 }
