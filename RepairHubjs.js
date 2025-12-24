@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactDOM from 'react-dom/client';
 import { createRoot } from 'react-dom/client';
 import { 
   MessageCircle, Plus, Wrench, Building2, LogOut, Send, CheckCircle, 
@@ -2424,3 +2425,4 @@ if (rootElement) {
 } else {
   console.error("ERROR: Cannot find element with id 'root'");
 }
+
