@@ -293,21 +293,33 @@ export default function RepairMarketplace() {
           toggleModal('review', { engineerId: contract.engineerId, contractId: contract.id });
       } catch (e) { alert("Transfer failed: " + e.message); }
   };
-
+// [FIX] Safer Registration Function
   const handleRegister = async (email, password, type, name) => {
-      if (!user?.uid) return alert("System connecting... please wait a moment.");
+      // 1. Safety Check: If name is missing, use "User"
+      const safeName = name && typeof name === 'string' ? name : "New User";
+      
+      if (!user?.uid) return alert("System initializing... please wait 2 seconds.");
+      
       try {
-          // Check if email already exists in our "simulated" auth DB
-          const q = query(collection(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, where("email", "==", email)));
-          const snap = await getDocs(q);
-          if (!snap.empty) return alert("This email is already registered. Please login instead.");
+          // 2. Create the profile data using the SAFE name
+          let profile;
+          if (type === 'company') {
+              profile = defineCompanyAccount(email, safeName);
+          } else {
+              profile = defineEngineerAccount(email, safeName);
+          }
           
-          const profile = type === 'company' ? defineCompanyAccount(email, name) : defineEngineerAccount(email, name);
-          
-          // RELIABLE REGISTRATION: Use setDoc to create/overwrite the account
+          // 3. Save to database
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', COLLECTIONS.USERS, user.uid), cleanData(profile));
+          
+          // 4. Update State immediately so the screen changes
           setUserProfile({ id: user.uid, ...profile });
-      } catch (e) { alert("Registration Error: " + e.message); }
+          alert("Account created successfully! Welcome " + safeName);
+          
+      } catch (e) { 
+          console.error(e);
+          alert("Registration Error: " + e.message); 
+      }
   };
 
   const handleLogin = async (email, password) => {
@@ -2498,3 +2510,4 @@ if (rootElement) {
 } else {
   console.error("ERROR: Cannot find element with id 'root'");
 }
+
