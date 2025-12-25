@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactDOM from 'react-dom/client';
 import { createRoot } from 'react-dom/client';
 import { 
   MessageCircle, Plus, Wrench, Building2, LogOut, Send, CheckCircle, 
@@ -2486,4 +2487,14 @@ function PremiumOfferCards({ onSelect, currentPlan }) {
             ))}
         </div>
     );
+}
+// ==========================================
+// [CRITICAL] START THE APP
+// ==========================================
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  const root = ReactDOM.createRoot(rootElement);
+  root.render(<RepairMarketplace />);
+} else {
+  console.error("ERROR: Cannot find element with id 'root'");
 }
